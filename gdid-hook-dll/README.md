@@ -1,19 +1,33 @@
 # GDID API Hook DLL (Mode 3)
 
-An optional DLL that hooks `RegQueryValueExW` to intercept GDID reads at the Win32 API level.
+Hooks `RegQueryValueExW` at the Win32 API layer. Instead of modifying registry values, this DLL intercepts reads to the GDID registry keys at runtime and returns a spoofed value — the real GDID stays untouched on disk.
 
 ## How It Works
 
-Instead of modifying registry values (which could cause consistency issues or trigger detection), this DLL sits between `cdp.dll`/`wlidsvc.dll` and the Windows registry API. When any process reads the GDID registry keys, the hook returns a spoofed value instead.
+```
+Process (CDPSvc / any app)
+  │  calls RegQueryValueExW("LID")
+  ▼
+gdid-hook.dll  ← intercepts
+  │  matches target path + value name
+  │  generates fake 0018-prefixed 64-bit hex
+  ▼ returns spoofed value
+Caller gets fake GDID (real value untouched)
+```
 
-The real registry value stays untouched — only the return value is modified at the API boundary.
-
-## Compilation Requirements
-
-- Visual Studio 2022 with Desktop development with C++ workload
-- [MinHook](https://github.com/TsudaKageyu/minhook) library (included as submodule)
+Uses [MinHook](https://github.com/TsudaKageyu/minhook) (MIT license) for API hooking — minimal, tested, x86/x64.
 
 ## Build
+
+### With CMake (recommended)
+
+```powershell
+cmake -B build
+cmake --build build --config Release
+# Output: build/bin/gdid-hook.dll
+```
+
+### With MSBuild (Visual Studio)
 
 ```powershell
 git submodule update --init
@@ -22,16 +36,40 @@ msbuild gdid-hook.vcxproj /p:Configuration=Release /p:Platform=x64
 
 ## Install
 
-```powershell
-# Via AppInit_DLLs (HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows)
-reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows" /v AppInit_DLLs /t REG_SZ /d "C:\path\to\gdid-hook.dll" /f
-reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows" /v LoadAppInit_DLLs /t REG_DWORD /d 1 /f
+### Via AppInit_DLLs (global, affects all processes)
 
-# Or via SetWindowsHookEx injection into CDPSvc
+```powershell
+# Set DLL path
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows" `
+  /v AppInit_DLLs /t REG_SZ /d "C:\path\to\gdid-hook.dll" /f
+# Enable loading
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows" `
+  /v LoadAppInit_DLLs /t REG_DWORD /d 1 /f
+# Require signed DLLs (0 = disabled)
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows" `
+  /v RequireSignedAppInit_DLLs /t REG_DWORD /d 0 /f
+
+# Reboot or restart target processes
+```
+
+### Via injection into CDPSvc (targeted)
+
+```powershell
+# Using a simple injector (e.g., CreateRemoteThread)
+# Or via gdid-tool.ps1: .\gdid-tool.ps1 config hookMethod api
 ```
 
 ## Detection Risk
 
 - `AppInit_DLLs` is well-known and flagged by many EDR/AV products
-- Recommended approach: use a reflective DLL loader or manual injection
+- Alternative: use `SetWindowsHookEx` or reflective DLL injection into `CDPSvc.exe` only
 - Most users should stick with Mode 2 (registry rotation + firewall) instead
+
+## Exported Functions
+
+| Function | Purpose |
+|----------|---------|
+| `InstallHooks()` | Enable the RegQueryValueExW hook |
+| `RemoveHooks()` | Disable and remove all hooks |
+| `EnableLogging(BOOL)` | Toggle debug output to DebugView |
+| `ToggleHooks(BOOL)` | Install (TRUE) or remove (FALSE) hooks
