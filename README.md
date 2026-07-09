@@ -149,7 +149,7 @@ Two ways to get `gdid-tool.exe`:
   ```powershell
   .\build-exe.ps1
   ```
-  The repo also builds the `.exe` automatically via GitHub Actions on every Release.
+  To produce a downloadable `.exe` on every release, point a GitHub Actions workflow at `.\build-exe.ps1`.
 
 > ⚠️ **Antivirus note:** `ps2exe` wrappers are sometimes flagged by AV because the same technique is abused by malware. The binary is safe and fully open-source (you can read `gdid-tool.ps1` yourself), but you may need to allow-list it. An unsigned `.exe` is more likely to be flagged than the `.ps1`.
 
