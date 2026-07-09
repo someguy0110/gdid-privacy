@@ -69,7 +69,7 @@ wlidsvc.dll  ──provision──→  login.live.com  ──assigns──→  6
 | **Also at** | `HKCU\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Token\{GUID}\DeviceId` |
 | **Reported by** | Delivery Optimization as `UCDOStatus.GlobalDeviceId` |
 | **Persists** | Across Windows updates — changes only on **reinstall** |
-| **Local-only?** | **No** — CDP has an anonymous device path even without MSA login |
+| **Local-only?** | **No** — CDP still creates an anonymous device identity even without an MSA login, and reports it to the same endpoints |
 
 > **Key insight:** GDID is **server-assigned**, not derived from hardware. A reinstall gets a new one. The client provisions with `login.live.com` and stores whatever PUID the server returns.
 
@@ -304,7 +304,7 @@ msbuild gdid-hook.vcxproj /p:Configuration=Release /p:Platform=x64
 ## 🧠 Caveats
 
 - **GDID is server-assigned.** Rotation changes the local value, but the server assigned the original. The firewall prevents the server from re-registering the real ID or rejecting the fake one.
-- **CDP has an anonymous path.** Even without signing into a Microsoft Account, some device tracking occurs. The firewall blocks the endpoints regardless.
+- **CDP has an anonymous path — signing out of MSA does *not* make you private.** Many people assume "I never signed into a Microsoft Account, so Microsoft can't track my device." That's wrong: the Connected Devices Platform (CDP) still generates a stable **anonymous device identity** for local features like Nearby Share and "Continue on PC". That anonymous ID is reported to the same backend endpoints (`dds.microsoft.com`, etc.) as the full GDID. This tool's firewall rules block those endpoints **regardless of whether you're signed in**, so both the MSA-linked ID and the anonymous path are cut off.
 - **Windows Updates may reset policies.** After a major Windows update, re-run `.\gdid-tool.ps1 install` to re-apply.
 
 ---
