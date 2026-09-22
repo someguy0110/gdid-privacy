@@ -145,13 +145,13 @@ gdid-tool.bat rotate
 Two ways to get `gdid-tool.exe`:
 
 - **Download (recommended):** grab `gdid-tool.exe` from the [Releases](https://github.com/someguy0110/gdid-privacy/releases) page. Double-click it — it elevates and installs by default.
-- **Build it yourself:** run `build-exe.ps1` (requires Windows + PowerShell, run as Administrator). It uses [ps2exe](https://github.com/MScholtes/PS2EXE) to compile the script:
+- **Build it yourself:** run `build-exe.ps1` (requires Windows + PowerShell, run as Administrator). It uses [ps12exe](https://github.com/steve02081504/ps12exe) to compile the script:
   ```powershell
   .\build-exe.ps1
   ```
   To produce a downloadable `.exe` on every release, point a GitHub Actions workflow at `.\build-exe.ps1`.
 
-> ⚠️ **Antivirus note:** `ps2exe` wrappers are sometimes flagged by AV because the same technique is abused by malware. The binary is safe and fully open-source (you can read `gdid-tool.ps1` yourself), but you may need to allow-list it. An unsigned `.exe` is more likely to be flagged than the `.ps1`.
+> ⚠️ **Antivirus note:** compiled PowerShell wrappers are sometimes flagged by AV because the same technique is abused by malware. [ps12exe](https://github.com/steve02081504/ps12exe) produces smaller binaries and tends to be flagged less often than PS2EXE's, but the binary is safe and fully open-source (you can read `gdid-tool.ps1` yourself) — you may still need to allow-list it. An unsigned `.exe` is more likely to be flagged than the `.ps1`.
 
 ### 3. Runs automatically when your PC starts
 `install` creates a Windows **scheduled task** called **`GDIDRotator`** that fires **AtStartup** (and on the rotation timer). Verify it:

@@ -3,10 +3,11 @@
     Requires Windows + PowerShell. Run as Administrator.
 
     What it does:
-      1. Installs the ps2exe module (if missing)
+      1. Installs the ps12exe module (if missing)
       2. Compiles gdid-tool.ps1 -> gdid-tool.exe
-         -noConsole   : no black window on double-click
-         -requireAdmin : triggers a UAC prompt automatically
+         The packaging options live in gdid-tool.ps1 as directives:
+         `#_pragma App.Windowed` (no console window on double-click)
+         `#_pragma Os.Admin`      (triggers a UAC prompt automatically)
 
     The resulting gdid-tool.exe can be double-clicked. It defaults to `install`
     (the .bat-style behaviour is compiled in via the script's own param defaults),
@@ -15,8 +16,8 @@
 
 $ErrorActionPreference = 'Stop'
 
-if (-not (Get-Module -ListAvailable ps2exe)) {
-    Install-Module ps2exe -Scope CurrentUser -Force
+if (-not (Get-Module -ListAvailable ps12exe)) {
+    Install-Module ps12exe -Scope CurrentUser -Force
 }
 
 $src = Join-Path $PSScriptRoot 'gdid-tool.ps1'
@@ -27,7 +28,7 @@ if (-not (Test-Path $src)) {
     exit 1
 }
 
-Invoke-PS2EXE -InputFile $src -OutputFile $out -noConsole -requireAdmin
+ps12exe -inputFile $src -outputFile $out
 
 Write-Host "Built: $out" -ForegroundColor Green
 Write-Host "Keep gdid-config.json (optional) in the same folder as the .exe." -ForegroundColor Yellow

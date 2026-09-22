@@ -26,6 +26,12 @@
     .\gdid-tool.ps1 install
 #>
 
+# ps12exe packaging directives (plain comments, ignored when running the .ps1 directly):
+#   App.Windowed : GUI subsystem, so double-clicking never opens a console window
+#   Os.Admin     : embed a requireAdministrator manifest, so launching prompts for UAC
+#_pragma App.Windowed
+#_pragma Os.Admin
+
 param(
     [Parameter(Position = 0)]
     [ValidateSet('status', 'rotate', 'install', 'uninstall', 'config', 'help')]
