@@ -1,13 +1,14 @@
 {
-    "rotationMode":     "perBoot",
-    "timedIntervalMin": 30,
-    "blockDDS":         true,
-    "blockActivity":    true,
-    "blockCDP":         false,
-    "killPhoneLink":    false,
-    "killOneDrive":     false,
-    "killStore":        false,
-    "killTimeline":     false,
-    "hookMethod":       "registry",
-    "lastRotation":     null
+  "rotationMode": "perBoot",
+  "timedIntervalMin": 30,
+  "blockCDP": true,
+  "killPhoneLink": false,
+  "killOneDrive": false,
+  "killStore": false,
+  "killTimeline": false,
+  "blockDO": false,
+  "blockHosts": true,
+  "hookMethod": "registry",
+  "lastRotation": null,
+  "originalGDID": null
 }
