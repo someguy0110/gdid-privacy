@@ -218,39 +218,77 @@ function Uninstall-HostsBlocks {
 # ---------- Scheduled tasks ----------
 function Install-RotationTask($cfg) {
     $taskName = "GDIDRotator"
-    $scriptPath = Join-Path $PSScriptRoot 'gdid-tool.ps1'
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" rotate"
 
-    $triggers = @()
-    if ($cfg.rotationMode -eq 'perBoot') {
-        $triggers += New-ScheduledTaskTrigger -AtStartup
-    } elseif ($cfg.rotationMode -eq 'timed') {
-        $triggers += New-ScheduledTaskTrigger -Daily -At "00:00"
-        $triggers += New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes $cfg.timedIntervalMin) -RepetitionDuration ([TimeSpan]::MaxValue)
-    }
-
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest -LogonType S4U
-
-    # Security note: scheduled tasks with RunLevel=Highest run from
-    # wherever the script lives. Keep the script in a location writable
-    # only by administrators (e.g. C:\Program Files\GDID) to avoid
-    # persistence-primitive risk.
-    if ($triggers.Count -eq 0) {
-        Write-Host "  [SKIP] No triggers for rotationMode=$($cfg.rotationMode)" -ForegroundColor Yellow
+    if ($cfg.rotationMode -eq 'onDemand') {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
         return
     }
 
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $settings -Principal $principal -Force | Out-Null
-    Write-Host "  [OK] Scheduled task '$taskName' created (mode: $($cfg.rotationMode))" -ForegroundColor Green
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $scriptPath = Join-Path $PSScriptRoot 'gdid-tool.ps1'
 
-    # Warn if script lives in user-writable location
-    $isUserPath = $PSScriptRoot -match "^$([regex]::Escape($env:USERPROFILE))" -or
-                  $PSScriptRoot -match "^$([regex]::Escape($env:HOMEPATH))"
-    if ($isUserPath) {
-        Write-Host "  [SEC] Task runs as SYSTEM from a user-writable path: $PSScriptRoot" -ForegroundColor Yellow
-        Write-Host "  [SEC] Consider moving to a protected directory (C:\Program Files\GDID)" -ForegroundColor Yellow
+    $triggers = @(
+        New-ScheduledTaskTrigger -AtLogOn -User $user
+    )
+
+    if ($cfg.rotationMode -eq 'timed') {
+        $minutes = [int]$cfg.timedIntervalMin
+        if ($minutes -lt 15 -or $minutes -gt 1440) {
+            throw 'Invalid rotation interval'
+        }
+
+        $triggers += New-ScheduledTaskTrigger `
+            -Once `
+            -At (Get-Date).AddMinutes(2) `
+            -RepetitionInterval (New-TimeSpan -Minutes $minutes)
     }
+    elseif ($cfg.rotationMode -ne 'perBoot') {
+        throw 'Invalid rotation mode'
+    }
+
+    $pwsh = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
+    if (-not $pwsh) {
+        $pwsh = (Get-Command powershell.exe -ErrorAction Stop).Source
+    }
+
+    $wscript = Join-Path $env:WINDIR 'System32\\wscript.exe'
+    $launcher = Join-Path $PSScriptRoot 'GDIDRotator-hidden.vbs'
+
+    if ((Test-Path $wscript) -and (Test-Path $launcher)) {
+        $arguments = '//B //Nologo "{0}" "{1}" "{2}"' -f $launcher, $pwsh, $scriptPath
+        $action = New-ScheduledTaskAction `
+            -Execute $wscript `
+            -Argument $arguments `
+            -WorkingDirectory $PSScriptRoot
+    }
+    else {
+        $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" rotate' -f $scriptPath
+        $action = New-ScheduledTaskAction `
+            -Execute $pwsh `
+            -Argument $arguments `
+            -WorkingDirectory $PSScriptRoot
+    }
+
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId $user `
+        -LogonType Interactive `
+        -RunLevel Highest
+
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable
+
+    Register-ScheduledTask `
+        -TaskName $taskName `
+        -Action $action `
+        -Trigger $triggers `
+        -Principal $principal `
+        -Settings $settings `
+        -Force `
+        -ErrorAction Stop | Out-Null
+
+    Write-Host '[OK] Rotation task registered'
 }
 function Uninstall-RotationTask {
     $taskName = "GDIDRotator"
@@ -260,56 +298,85 @@ function Uninstall-RotationTask {
 
 # ---------- Feature kill switches ----------
 function Install-FeatureKills($cfg) {
+    # Back up original startup types for uninstall restoration
+    if (-not $PSBoundParameters.ContainsKey('backupRestored')) {
+        $backup = @{
+            CDPSvcCurrent   = (Get-CimInstance -ClassName Win32_Service -Filter "Name='CDPSvc'").StartMode
+            CDPUserSvcCurrent = (Get-CimInstance -ClassName Win32_Service -Filter "Name='CDPUserSvc'").StartMode
+            DoSvcCurrent    = (Get-CimInstance -ClassName Win32_Service -Filter "Name='DoSvc'").StartMode
+        }
+        # Store in script scope for uninstall to read
+        $script:backupOriginalStartup = $backup
+    }
+
     if ($cfg.killPhoneLink) {
         Stop-Process -Name 'PhoneExperienceHost' -Force -ErrorAction SilentlyContinue
-        $pkPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Windows\Phone'
+        $pkPath = 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Windows\\Phone'
         if (-not (Test-Path $pkPath)) { New-Item -Path $pkPath -Force | Out-Null }
         Set-ItemProperty -Path $pkPath -Name 'Enable' -Value 0 -Type DWord -Force
-        Write-Host "  [OK] Phone Link disabled" -ForegroundColor Green
+        Write-Host '[OK] Phone Link disabled' -ForegroundColor Green
     }
 
     if ($cfg.killOneDrive) {
         Stop-Process -Name 'OneDrive' -Force -ErrorAction SilentlyContinue
-        $odPath = 'HKLM:\SOFTWARE\Policies\Microsoft\OneDrive'
+        $odPath = 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\OneDrive'
         if (-not (Test-Path $odPath)) { New-Item -Path $odPath -Force | Out-Null }
         Set-ItemProperty -Path $odPath -Name 'DisableFileSyncNGSC' -Value 1 -Type DWord -Force
-        Write-Host "  [OK] OneDrive sync disabled (policy)" -ForegroundColor Green
+        Write-Host '[OK] OneDrive sync disabled (policy)' -ForegroundColor Green
     }
 
     if ($cfg.killStore) {
-        $wsPath = 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore'
+        $wsPath = 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\WindowsStore'
         if (-not (Test-Path $wsPath)) { New-Item -Path $wsPath -Force | Out-Null }
         Set-ItemProperty -Path $wsPath -Name 'AutoDownload' -Value 2 -Type DWord -Force
-        Write-Host "  [OK] Store auto-update disabled" -ForegroundColor Green
+        Write-Host '[OK] Store auto-update disabled' -ForegroundColor Green
     }
 
     if ($cfg.killTimeline) {
-        $atPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
+        $atPath = 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\System'
         if (-not (Test-Path $atPath)) { New-Item -Path $atPath -Force | Out-Null }
         Set-ItemProperty -Path $atPath -Name 'EnableActivityFeed' -Value 0 -Type DWord -Force
         Set-ItemProperty -Path $atPath -Name 'PublishUserActivities' -Value 0 -Type DWord -Force
-        Write-Host "  [OK] Activity History / Timeline disabled" -ForegroundColor Green
+        Write-Host '[OK] Activity History / Timeline disabled' -ForegroundColor Green
     }
 
     if ($cfg.blockCDP) {
-        Set-Service CDPSvc -StartupType Disabled
-        Set-Service CDPUserSvc -StartupType Disabled
-        # Per-user service instances (CDPUserSvc_*) are template-based and
-        # can't be disabled individually — Windows rejects it. Skip them.
-        Get-Service 'CDPUserSvc_*' -ErrorAction SilentlyContinue | ForEach-Object {
-            try {
-                Set-Service $_.Name -StartupType Disabled -ErrorAction Stop
-            } catch {
-                Write-Host "  [SKIP] $($_.Name) is a per-user instance — can't disable individually" -ForegroundColor DarkGray
-            }
+        Set-Service CDPSvc -StartupType Disabled -ErrorAction Stop
+
+        $template = 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\CDPUserSvc'
+
+        if (-not (Test-Path $template)) {
+            throw 'CDPUserSvc template not found'
         }
-        Write-Host "  [OK] CDP services disabled" -ForegroundColor Green
+
+        Set-ItemProperty `
+            -Path $template `
+            -Name Start `
+            -Value 4 `
+            -ErrorAction Stop
+
+        Get-Service -Name 'CDPSvc','CDPUserSvc_*' -ErrorAction SilentlyContinue |
+            Where-Object Status -eq 'Running' |
+            ForEach-Object {
+                Stop-Service -Name $_.Name -Force -ErrorAction Stop
+            }
+
+        $running = @(
+            Get-Service -Name 'CDPSvc','CDPUserSvc_*' -ErrorAction SilentlyContinue |
+                Where-Object Status -eq 'Running'
+        )
+
+        if ($running.Count -gt 0) {
+            throw 'CDP services are still running'
+        }
+
+        Write-Host '[OK] CDP services stopped' -ForegroundColor Green
     }
 
     if ($cfg.blockDO) {
         Stop-Service DoSvc -Force -ErrorAction SilentlyContinue
         Set-Service DoSvc -StartupType Disabled
-        Write-Host "  [OK] Delivery Optimization service (DoSvc) disabled" -ForegroundColor Green
+        Write-Host '[OK] Delivery Optimization service (DoSvc) disabled' -ForegroundColor Green
     }
 
     if ($cfg.blockHosts) {
@@ -333,18 +400,35 @@ function Uninstall-FeatureKills {
         Remove-ItemProperty -Path $atPath -Name 'PublishUserActivities' -ErrorAction SilentlyContinue
     }
 
-    Set-Service CDPSvc -StartupType Manual -ErrorAction SilentlyContinue
-    Set-Service CDPUserSvc -StartupType Manual -ErrorAction SilentlyContinue
-    Get-Service 'CDPUserSvc_*' -ErrorAction SilentlyContinue | ForEach-Object {
-        try {
-            Set-Service $_.Name -StartupType Manual -ErrorAction Stop
-        } catch {
-            # Per-user instances can't be configured individually — skip
+    # Restore original startup types if we have them backed up
+    if ($script:backupOriginalStartup) {
+        if ($script:backupOriginalStartup.CDPSvcCurrent) {
+            Set-Service CDPSvc -StartupType $script:backupOriginalStartup.CDPSvcCurrent -ErrorAction SilentlyContinue
         }
-    }
+        if ($script:backupOriginalStartup.CDPUserSvcCurrent) {
+            Set-Service CDPUserSvc -StartupType $script:backupOriginalStartup.CDPUserSvcCurrent -ErrorAction SilentlyContinue
+            # Per-user instances can't be configured individually, but we tried to backup the template
+        }
+        if ($script:backupOriginalStartup.DoSvcCurrent) {
+            Set-Service DoSvc -StartupType $script:backupOriginalStartup.DoSvcCurrent -ErrorAction SilentlyContinue
+        }
+        # Clear the backup after restoration
+        Remove-Variable -Name script:backupOriginalStartup -ErrorAction SilentlyContinue
+    } else {
+        # Fallback to original behavior if no backup exists
+        Set-Service CDPSvc -StartupType Manual -ErrorAction SilentlyContinue
+        Set-Service CDPUserSvc -StartupType Manual -ErrorAction SilentlyContinue
+        Get-Service 'CDPUserSvc_*' -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+                Set-Service $_.Name -StartupType Manual -ErrorAction Stop
+            } catch {
+                # Per-user instances can't be configured individually — skip
+            }
+        }
 
-    Set-Service DoSvc -StartupType Manual -ErrorAction SilentlyContinue
-    Write-Host "  [OK] DoSvc restored to Manual" -ForegroundColor Green
+        Set-Service DoSvc -StartupType Manual -ErrorAction SilentlyContinue
+        Write-Host "[OK] DoSvc restored to Manual" -ForegroundColor Green
+    }
 
     Uninstall-HostsBlocks
 }
@@ -452,7 +536,13 @@ function Invoke-Rotate {
     Write-Host "  New GDID: $new" -ForegroundColor White
 
     Write-GDID $new
-    Clear-CDPState
+
+    # VERIFY: Immediately check that GDID was written locally
+    $actual = Get-CurrentGDID
+    if (-not $actual -or $actual.hex -ne $new) {
+        throw "Local GDID verification failed: expected $new, got $($actual.hex)"
+    }
+    Write-Host "  [OK] Local GDID verified: $new" -ForegroundColor Green
 
     $cfg['lastRotation'] = (Get-Date).ToString('o')
     Save-Config $cfg
